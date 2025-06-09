@@ -7,6 +7,7 @@ import openai
 import hashlib
 import random
 from datetime import timedelta
+import re
 
 def extract_subtitles(video_path):
     """从视频文件中提取字幕或尝试读取同名SRT文件"""
@@ -303,51 +304,101 @@ def translate_text_content(text_content, target_lang='en', api_choice='百度翻
     return "\n".join(translated_paragraphs)
 
 def create_subtitles_from_text(text_content, output_dir, duration_per_char=0.2):
-    """修复空文本和无效时间戳问题"""
+    """从文本内容创建字幕文件，确保字幕与音频更好地对应"""
     import pysrt
+    import re
     
     # 添加空文本检查
     if not text_content.strip():
         raise ValueError("文本内容不能为空")
     
-    # 按句子分割（增强鲁棒性）
+    # 使用更智能的句子分割方法
+    # 使用正则表达式匹配句子结束标志
     sentences = []
-    current = ""
-    for char in text_content:
-        current += char
-        # 更合理的分割条件：标点+长度限制
-        if char in ['.', '。', '!', '！', '?', '？', '\n'] or len(current) >= 50:
-            if current.strip():
-                sentences.append(current.strip())
-            current = ""
-    if current.strip():
-        sentences.append(current.strip())
+    # 按标点符号和自然段落分割
+    pattern = r'([^。！？.!?\n]+[。！？.!?\n])'
+    raw_sentences = re.findall(pattern, text_content)
+    
+    # 处理分割后的句子，避免过长句子
+    for raw_sentence in raw_sentences:
+        # 去除首尾空白
+        cleaned = raw_sentence.strip()
+        if not cleaned:
+            continue
+            
+        # 如果句子太长，进一步分割
+        if len(cleaned) > 40:
+            # 按逗号、分号等次要标点分割
+            sub_pattern = r'([^，,；;、]+[，,；;、])'
+            sub_sentences = re.findall(sub_pattern, cleaned)
+            
+            # 如果能分割，就添加分割后的子句
+            if sub_sentences:
+                for sub in sub_sentences:
+                    if sub.strip():
+                        sentences.append(sub.strip())
+                
+                # 检查是否有剩余部分
+                last_part = re.sub(r'.*[，,；;、]', '', cleaned).strip()
+                if last_part:
+                    sentences.append(last_part)
+            else:
+                # 如果无法按次要标点分割，则按固定长度分割
+                for i in range(0, len(cleaned), 30):
+                    part = cleaned[i:i+30].strip()
+                    if part:
+                        sentences.append(part)
+        else:
+            sentences.append(cleaned)
     
     # 添加句子有效性检查
     if len(sentences) == 0:
         raise ValueError("未检测到有效句子")
     
-    # 计算总时长（防止除零错误）
-    total_chars = sum(len(s) for s in sentences)
-    total_duration = max(1.0, total_chars * duration_per_char)  # 确保最小1秒
-    
+    # 计算每个句子的时长，考虑句子长度和标点符号
     subtitles = pysrt.SubRipFile()
-    time_per_sentence = total_duration / len(sentences)
     
+    # 计算总时长，考虑句子长度和复杂度
+    total_chars = sum(len(s) for s in sentences)
+    # 根据字符数和句子数调整总时长
+    total_duration = max(len(sentences) * 2.0, total_chars * duration_per_char)
+    
+    # 动态计算每个句子的时长
+    current_time = 0.0
     for i, sentence in enumerate(sentences):
         sub = pysrt.SubRipItem()
         sub.index = i + 1
         
-        # 计算时间戳（增加边界检查）
-        start_time = max(0.0, i * time_per_sentence)
-        end_time = min(total_duration, (i + 1) * time_per_sentence)
+        # 根据句子长度和复杂度计算时长
+        # 1. 基础时长：每个字符的时长
+        # 2. 额外时长：句子结束有标点符号时增加停顿时间
+        char_count = len(sentence)
+        base_duration = char_count * duration_per_char
         
-        # 确保时间差至少0.5秒
-        if end_time - start_time < 0.5:
-            end_time = start_time + 0.5
+        # 根据句子结束的标点符号调整时长
+        if sentence.endswith(('。', '.', '!', '！', '?', '？')):
+            pause_time = 0.5  # 句号等停顿较长
+        elif sentence.endswith(('，', ',', '、', '；', ';')):
+            pause_time = 0.3  # 逗号等停顿较短
+        else:
+            pause_time = 0.2  # 无明显标点的默认停顿
         
-        sub.start.seconds = start_time
-        sub.end.seconds = end_time
+        # 最终时长 = 基础时长 + 停顿时间，确保最小时长
+        sentence_duration = max(1.0, base_duration + pause_time)
+        
+        # 设置时间戳
+        start_seconds = current_time
+        end_seconds = current_time + sentence_duration
+        
+        # 更新当前时间
+        current_time = end_seconds
+        
+        # 转换为时间对象
+        start_time = pysrt.SubRipTime(seconds=start_seconds)
+        end_time = pysrt.SubRipTime(seconds=end_seconds)
+        
+        sub.start = start_time
+        sub.end = end_time
         sub.text = sentence
         
         subtitles.append(sub)

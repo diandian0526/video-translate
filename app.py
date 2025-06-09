@@ -9,6 +9,7 @@ from video_processor import process_video, download_video_from_url, auto_generat
 from video_processor import extract_audio, generate_text_from_audio
 import subprocess
 import traceback
+import json
 
 def main():
     st.set_page_config(page_title="视频字幕翻译工具", layout="wide")
@@ -58,6 +59,15 @@ def main():
         color: #ffffff !important;
         background-color: rgba(255, 255, 255, 0.1) !important;
         border-color: rgba(255, 255, 255, 0.2) !important;
+    }
+    
+    /* 输出视频路径显示框样式特殊定制 */
+    section[data-testid="stSidebar"] .stTextInput input[aria-label="输出视频保存路径"] {
+        color: #1E90FF !important;
+        background-color: rgba(255, 255, 255, 0.25) !important;
+        font-weight: 500;
+        border-color: rgba(70, 130, 180, 0.5) !important;
+        border-width: 2px;
     }
     
     /* 左侧边栏下拉菜单 */
@@ -374,6 +384,38 @@ font = "sans serif"
         os.makedirs(temp_dir, exist_ok=True)
         st.session_state.temp_dir = temp_dir
     
+    # 用于存储API密钥的文件路径
+    api_keys_file = os.path.join(st.session_state.temp_dir, "api_keys.json")
+    
+    # 初始化API密钥存储
+    if 'api_keys' not in st.session_state:
+        # 尝试从文件加载保存的API密钥
+        if os.path.exists(api_keys_file):
+            try:
+                with open(api_keys_file, 'r', encoding='utf-8') as f:
+                    st.session_state.api_keys = json.load(f)
+            except Exception as e:
+                st.session_state.api_keys = {
+                    "baidu_appid": "",
+                    "baidu_secret_key": "",
+                    "openai_api_key": ""
+                }
+                print(f"加载API密钥文件失败: {e}")
+        else:
+            st.session_state.api_keys = {
+                "baidu_appid": "",
+                "baidu_secret_key": "",
+                "openai_api_key": ""
+            }
+    
+    # 保存API密钥到文件的函数
+    def save_api_keys():
+        try:
+            with open(api_keys_file, 'w', encoding='utf-8') as f:
+                json.dump(st.session_state.api_keys, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存API密钥失败: {e}")
+    
     # 侧边栏-参数设置
     with st.sidebar:
         st.header("参数设置")
@@ -406,18 +448,168 @@ font = "sans serif"
         )
         
         if api_choice == "百度翻译 (免费)":
-            baidu_appid = st.text_input("百度翻译APP ID", type="password", help="如需使用百度翻译API，请输入APP ID")
-            baidu_secret_key = st.text_input("百度翻译密钥", type="password", help="请输入百度翻译密钥")
+            # 显示已保存的百度API密钥（如果有）
+            saved_baidu_appid = st.session_state.api_keys.get("baidu_appid", "")
+            saved_baidu_secret = st.session_state.api_keys.get("baidu_secret_key", "")
+            
+            # 显示保存状态
+            if saved_baidu_appid and saved_baidu_secret:
+                st.success("已保存百度翻译API密钥")
+                show_saved = st.checkbox("使用已保存的密钥", value=True)
+                
+                if show_saved:
+                    # 使用已保存的密钥
+                    baidu_appid = saved_baidu_appid
+                    baidu_secret_key = saved_baidu_secret
+                    
+                    # 显示重新输入选项
+                    if st.button("重新输入API密钥"):
+                        show_saved = False
+                else:
+                    # 重新输入密钥
+                    baidu_appid = st.text_input("百度翻译APP ID", type="password", help="如需使用百度翻译API，请输入APP ID")
+                    baidu_secret_key = st.text_input("百度翻译密钥", type="password", help="请输入百度翻译密钥")
+                    
+                    # 保存新输入的密钥
+                    if baidu_appid and baidu_secret_key and (baidu_appid != saved_baidu_appid or baidu_secret_key != saved_baidu_secret):
+                        st.session_state.api_keys["baidu_appid"] = baidu_appid
+                        st.session_state.api_keys["baidu_secret_key"] = baidu_secret_key
+                        save_api_keys()
+                        st.success("API密钥已保存")
+            else:
+                # 首次输入密钥
+                baidu_appid = st.text_input("百度翻译APP ID", type="password", help="如需使用百度翻译API，请输入APP ID")
+                baidu_secret_key = st.text_input("百度翻译密钥", type="password", help="请输入百度翻译密钥")
+                
+                # 保存新输入的密钥
+                if baidu_appid and baidu_secret_key:
+                    save_key = st.checkbox("保存密钥供下次使用", value=True)
+                    if save_key:
+                        st.session_state.api_keys["baidu_appid"] = baidu_appid
+                        st.session_state.api_keys["baidu_secret_key"] = baidu_secret_key
+                        save_api_keys()
+                        st.success("API密钥已保存")
+            
             openai_api_key = None
             
             if not baidu_appid or not baidu_secret_key:
                 st.warning("请填写百度翻译APP ID和密钥")
                 st.info("您可以在百度翻译开放平台获取API密钥，并确保将您的IP添加到白名单中")
         elif api_choice == "ChatGPT (需自备API密钥)":
-            openai_api_key = st.text_input("OpenAI API密钥", type="password")
+            # 显示已保存的OpenAI API密钥（如果有）
+            saved_openai_key = st.session_state.api_keys.get("openai_api_key", "")
+            
+            # 显示保存状态
+            if saved_openai_key:
+                st.success("已保存OpenAI API密钥")
+                show_saved = st.checkbox("使用已保存的密钥", value=True)
+                
+                if show_saved:
+                    # 使用已保存的密钥
+                    openai_api_key = saved_openai_key
+                    
+                    # 显示重新输入选项
+                    if st.button("重新输入API密钥"):
+                        show_saved = False
+                else:
+                    # 重新输入密钥
+                    openai_api_key = st.text_input("OpenAI API密钥", type="password")
+                    
+                    # 保存新输入的密钥
+                    if openai_api_key and openai_api_key != saved_openai_key:
+                        st.session_state.api_keys["openai_api_key"] = openai_api_key
+                        save_api_keys()
+                        st.success("API密钥已保存")
+            else:
+                # 首次输入密钥
+                openai_api_key = st.text_input("OpenAI API密钥", type="password")
+                
+                # 保存新输入的密钥
+                if openai_api_key:
+                    save_key = st.checkbox("保存密钥供下次使用", value=True)
+                    if save_key:
+                        st.session_state.api_keys["openai_api_key"] = openai_api_key
+                        save_api_keys()
+                        st.success("API密钥已保存")
+            
             baidu_appid = None
             baidu_secret_key = None
+        
+        # 添加字幕样式设置折叠面板
+        with st.expander("字幕样式设置", expanded=False):
+            # 字体选择
+            font_options = ["Arial", "SimHei", "Microsoft YaHei", "SimSun", "KaiTi", "FangSong", "Times New Roman"]
+            font = st.selectbox("字体", options=font_options, index=0)
             
+            # 字体大小
+            fontsize = st.slider("字体大小", min_value=12, max_value=48, value=24, step=2)
+            
+            # 字体颜色
+            primary_color_options = {
+                "白色": "white", 
+                "黑色": "black", 
+                "黄色": "yellow", 
+                "红色": "red", 
+                "蓝色": "blue", 
+                "绿色": "green",
+                "粉色": "pink"
+            }
+            primary_color_display = st.selectbox("字体颜色", options=list(primary_color_options.keys()), index=0)
+            primary_color = primary_color_options[primary_color_display]
+            
+            # 轮廓颜色
+            outline_color_options = {
+                "黑色": "black", 
+                "白色": "white", 
+                "黄色": "yellow", 
+                "红色": "red", 
+                "蓝色": "blue", 
+                "绿色": "green",
+                "透明": "transparent"
+            }
+            outline_color_display = st.selectbox("轮廓颜色", options=list(outline_color_options.keys()), index=0)
+            outline_color = outline_color_options[outline_color_display]
+            
+            # 轮廓宽度
+            outline_width = st.slider("轮廓宽度", min_value=0, max_value=4, value=2, step=1)
+            
+            # 位置
+            position = st.radio("字幕位置", options=["底部", "顶部"], index=0)
+            position_value = "bottom" if position == "底部" else "top"
+            
+            # 垂直边距
+            margin_v = st.slider("垂直边距", min_value=10, max_value=100, value=30, step=5)
+            
+            # 水平边距
+            margin_h = st.slider("水平边距", min_value=10, max_value=100, value=20, step=5)
+            
+            # 对齐方式
+            alignment_options = {"居中对齐": 2, "左对齐": 1, "右对齐": 3}
+            alignment_display = st.radio("对齐方式", options=list(alignment_options.keys()), index=0, horizontal=True)
+            alignment = alignment_options[alignment_display]
+            
+            # 粗体和斜体
+            col1, col2 = st.columns(2)
+            with col1:
+                bold = 1 if st.checkbox("粗体", value=False) else 0
+            with col2:
+                italic = 1 if st.checkbox("斜体", value=False) else 0
+            
+            # 创建字幕样式字典
+            subtitle_style = {
+                'font': font,
+                'fontsize': fontsize,
+                'primary_color': primary_color,
+                'outline_color': outline_color,
+                'outline_width': outline_width,
+                'position': position_value,
+                'margin_v': margin_v,
+                'margin_h': margin_h,
+                'alignment': alignment,
+                'bold': bold,
+                'italic': italic
+            }
+        
         auto_subtitle = st.checkbox("如无字幕，自动生成（需安装Whisper）", value=True)
         
         output_path = st.text_input("输出视频保存路径", value=r"C:\Temp\video\output")
@@ -449,6 +641,21 @@ font = "sans serif"
             st.session_state.video_path = temp_path
             st.video(temp_path)
             
+            # 添加一个处理视频按钮
+            if st.button("一键生成视频"):
+                # 调用process_uploaded_video函数，传递字幕样式参数
+                process_uploaded_video(
+                    st.session_state.video_path,
+                    st.session_state.temp_dir,
+                    language_code[target_language],
+                    api_choice,
+                    baidu_appid if api_choice == "百度翻译 (免费)" else openai_api_key,
+                    baidu_secret_key if api_choice == "百度翻译 (免费)" else None,  # 传递secret_key
+                    subtitle_position == "原字幕下方",
+                    auto_subtitle,
+                    subtitle_style  # 传递字幕样式
+                )
+            
             if st.button("开始提取音频"):
                 with st.spinner("正在提取音频..."):
                     st.session_state.audio_path = extract_audio(temp_path, st.session_state.temp_dir)
@@ -461,32 +668,106 @@ font = "sans serif"
     with tabs[1]:  # URL链接
         video_url = st.text_input("输入视频URL")
         
-        if video_url and st.button("从URL下载视频"):
-            with st.spinner("下载并处理URL视频中..."):
-                # 下载视频
-                video_path = download_video_from_url(video_url, st.session_state.temp_dir)
-                
-                if video_path:
-                    st.session_state.video_path = video_path
-                    st.success("视频下载成功!")
-                    st.video(video_path)
+        # 添加会话状态变量，用于存储URL和下载状态
+        if 'url_video_downloaded' not in st.session_state:
+            st.session_state.url_video_downloaded = False
+        if 'last_video_url' not in st.session_state:
+            st.session_state.last_video_url = ""
+        
+        # 检查是否已经下载过视频，避免重复下载
+        if video_url and video_url != st.session_state.last_video_url:
+            st.session_state.url_video_downloaded = False
+        
+        download_button = st.button("从URL下载视频")
+        
+        # 如果点击下载按钮或已经下载过视频
+        if (video_url and download_button) or (video_url and st.session_state.url_video_downloaded and video_url == st.session_state.last_video_url):
+            if not st.session_state.url_video_downloaded:
+                with st.spinner("下载并处理URL视频中..."):
+                    # 下载视频
+                    video_path = download_video_from_url(video_url, st.session_state.temp_dir)
                     
-                    if st.button("开始提取音频", key="extract_url_audio"):
-                        with st.spinner("正在提取音频..."):
-                            st.session_state.audio_path = extract_audio(video_path, st.session_state.temp_dir)
-                            if st.session_state.audio_path:
-                                st.success("音频提取成功!")
-                                st.audio(st.session_state.audio_path)
-                            else:
-                                st.error("音频提取失败")
-                else:
-                    st.error("视频下载失败，请检查URL或尝试其他视频")
+                    if video_path:
+                        st.session_state.video_path = video_path
+                        st.session_state.url_video_downloaded = True
+                        st.session_state.last_video_url = video_url
+                        st.success("视频下载成功!")
+                    else:
+                        st.error("视频下载失败，请检查URL或尝试其他视频")
+            
+            # 如果视频已下载成功，显示视频
+            if st.session_state.url_video_downloaded and st.session_state.video_path:
+                st.video(st.session_state.video_path)
+                
+                # 添加处理视频按钮
+                if st.button("一键生成视频", key="process_url_video"):
+                    # 调用process_uploaded_video函数，传递字幕样式参数
+                    process_uploaded_video(
+                        st.session_state.video_path,
+                        st.session_state.temp_dir,
+                        language_code[target_language],
+                        api_choice,
+                        baidu_appid if api_choice == "百度翻译 (免费)" else openai_api_key,
+                        baidu_secret_key if api_choice == "百度翻译 (免费)" else None,  # 传递secret_key
+                        subtitle_position == "原字幕下方",
+                        auto_subtitle,
+                        subtitle_style  # 传递字幕样式
+                    )
+                
+                # 添加提取音频按钮
+                extract_button = st.button("开始提取音频", key="extract_url_audio")
+                
+                if extract_button:
+                    with st.spinner("正在提取音频..."):
+                        st.session_state.audio_path = extract_audio(st.session_state.video_path, st.session_state.temp_dir)
+                        if st.session_state.audio_path:
+                            st.success("音频提取成功!")
+                            st.audio(st.session_state.audio_path)
+                        else:
+                            st.error("音频提取失败，可能是视频没有音轨或格式不支持")
+                
+                # 如果已经提取了音频，显示音频
+                if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
+                    st.success("音频已提取")
+                    st.audio(st.session_state.audio_path)
     
     with tabs[2]:  # 音频处理
         st.subheader("音频处理")
         
         if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
             st.audio(st.session_state.audio_path)
+            
+            # 检查whisper是否已安装
+            whisper_installed = False
+            try:
+                # 尝试导入whisper模块
+                import importlib.util
+                if importlib.util.find_spec('whisper') is not None:
+                    whisper_installed = True
+            except ImportError:
+                pass
+            
+            if not whisper_installed:
+                st.warning("未检测到Whisper语音识别库，将使用备用方法处理音频。为获得更好的结果，建议安装Whisper：")
+                st.code("pip install openai-whisper")
+                if st.button("了解更多关于Whisper"):
+                    st.markdown("""
+                    ### 关于Whisper
+                    
+                    Whisper是OpenAI开发的强大语音识别系统，可以将音频转换为文本。它支持多种语言，识别准确率高。
+                    
+                    #### 安装要求:
+                    - Python 3.8+
+                    - PyTorch 1.10.0+
+                    - FFmpeg
+                    
+                    #### 安装命令:
+                    ```
+                    pip install openai-whisper
+                    ```
+                    
+                    安装后重新运行程序，即可使用Whisper自动生成高质量文本。
+                    """)
             
             if st.button("从音频生成文本"):
                 with st.spinner("正在生成文本，这可能需要一些时间..."):
@@ -495,6 +776,10 @@ font = "sans serif"
                         st.session_state.text_content = read_text_file(st.session_state.text_path)
                         st.session_state.edited_content = st.session_state.text_content
                         st.success("文本生成成功!")
+                        
+                        # 如果文本中包含提示信息，说明使用了备用方法
+                        if "由于未安装Whisper" in st.session_state.text_content or "请手动输入" in st.session_state.text_content:
+                            st.info("由于未安装Whisper，生成的是基本信息模板。请在文本编辑页面手动输入音频内容。")
                     else:
                         st.error("文本生成失败")
         else:
@@ -571,6 +856,29 @@ font = "sans serif"
         
         if st.session_state.video_path and st.session_state.edited_content and st.session_state.translated_content:
             
+            # 添加字幕样式预览
+            st.markdown("### 字幕样式预览")
+            
+            # 创建预览样式的HTML
+            preview_style = f"""
+            <div style="padding: 10px; background-color: rgba(0,0,0,0.7); border-radius: 5px; margin-bottom: 20px;">
+                <p style="
+                    font-family: {subtitle_style['font']};
+                    font-size: {subtitle_style['fontsize']}px;
+                    color: {subtitle_style['primary_color']};
+                    text-shadow: 0px 0px {subtitle_style['outline_width']}px {subtitle_style['outline_color']};
+                    text-align: {['left', 'center', 'right'][subtitle_style['alignment']-1]};
+                    font-weight: {'bold' if subtitle_style['bold'] == 1 else 'normal'};
+                    font-style: {'italic' if subtitle_style['italic'] == 1 else 'normal'};
+                    margin: 0;
+                ">
+                这是字幕样式预览，This is subtitle style preview
+                </p>
+            </div>
+            """
+            
+            st.markdown(preview_style, unsafe_allow_html=True)
+            
             if st.button("生成字幕视频"):
                 try:
                     # 创建输出目录（确保路径存在）
@@ -595,11 +903,12 @@ font = "sans serif"
                     video_filename = os.path.basename(st.session_state.video_path)
                     output_video_path = os.path.join(output_path, f"translated_{video_filename}")
                     
-                    # 执行视频处理
+                    # 执行视频处理，传递字幕样式
                     success = process_video(
                         st.session_state.video_path, 
                         output_video_path, 
-                        translated_srt_path  # 直接使用生成的翻译字幕
+                        translated_srt_path,
+                        subtitle_style  # 传递字幕样式参数
                     )
                     
                     if success:
@@ -624,14 +933,14 @@ font = "sans serif"
                 
             st.info(f"请先完成以下步骤: {', '.join(missing)}")
     
-def process_uploaded_video(video_path, temp_dir, target_lang, api_choice, api_key, merge_below, auto_subtitle):
+def process_uploaded_video(video_path, temp_dir, target_lang, api_choice, api_key, secret_key=None, merge_below=True, auto_subtitle=True, subtitle_style=None):
     """处理上传的视频"""
     with st.spinner("处理中，请稍候..."):
         # 提取字幕
         subtitles = extract_subtitles(video_path)
         
         if not subtitles and auto_subtitle:
-            st.info("正在使用Whisper自动生成字幕，这可能需要一些时间...")
+            st.info("正在自动生成字幕，这可能需要一些时间...")
             subtitle_path = auto_generate_subtitles(video_path, temp_dir)
             if subtitle_path and os.path.exists(subtitle_path):
                 subtitles = pysrt.open(subtitle_path)
@@ -646,7 +955,8 @@ def process_uploaded_video(video_path, temp_dir, target_lang, api_choice, api_ke
                 subtitles, 
                 target_lang=target_lang,
                 api_choice=api_choice,
-                api_key=api_key
+                api_key=api_key,
+                secret_key=secret_key
             )
         
         # 合并字幕并处理视频
@@ -662,7 +972,7 @@ def process_uploaded_video(video_path, temp_dir, target_lang, api_choice, api_ke
             )
         
         with st.status("正在处理最终视频..."):
-            success = process_video(video_path, output_path, merged_srt_path)
+            success = process_video(video_path, output_path, merged_srt_path, subtitle_style)
         
         if success:
             # 显示结果并提供下载链接
